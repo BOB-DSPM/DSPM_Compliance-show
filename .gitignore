@@ -1,0 +1,52 @@
+# --- OS / Editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+.python-version
+
+# --- Packaging / Build ---
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Testing / Coverage / Linters ---
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.pytype/
+.ruff_cache/
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Env / Secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Local DB / State ---
+app.db
+*.sqlite
+*.sqlite3
+
+# --- Uvicorn / Runtime ---
+*.pid
+
+# --- Cache / Misc ---
+.cache/
