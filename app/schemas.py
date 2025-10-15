@@ -11,6 +11,7 @@ class RequirementRowOut(BaseModel):
     item_code: Optional[str]
     title: str
     mapping_status: Optional[str]
+    regulation: Optional[str] = None
 
 class MappingOut(BaseModel):
     code: str
@@ -28,4 +29,5 @@ class MappingOut(BaseModel):
 class RequirementDetailOut(BaseModel):
     framework: str
     requirement: RequirementRowOut
+    regulation: Optional[str] = None
     mappings: List[MappingOut]

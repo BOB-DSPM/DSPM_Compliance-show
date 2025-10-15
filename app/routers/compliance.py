@@ -7,7 +7,7 @@ from ..services.compliance_service import (
 from ..schemas import FrameworkCountOut, RequirementRowOut, RequirementDetailOut
 ensure_tables(engine)
 
-router = APIRouter(prefix="/compliance", tags=["compliance"])
+router = APIRouter(tags=["compliance"])
 
 # 2) 컴플라이언스별 항목 개수
 @router.get("/stats", response_model=list[FrameworkCountOut])
