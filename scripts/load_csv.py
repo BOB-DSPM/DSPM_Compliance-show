@@ -54,7 +54,7 @@ def load_requirements(db: Session, req_csv: Path):
             upsert_framework(db, framework_code)
 
             item_code = (row.get("세부항목") or "").strip() or None
-            title = item_code or (row.get("규제내용") or "")[:80]  # 타이틀 없으면 앞부분
+            title = item_code or (row.get("규제내용") or "")[:80]
             r = Requirement(
                 framework_code=framework_code,
                 item_code=item_code,
