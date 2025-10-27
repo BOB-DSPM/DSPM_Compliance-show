@@ -10,30 +10,21 @@ class Framework(Base):
     name: Mapped[str] = mapped_column(String(128))
     requirements: Mapped[List["Requirement"]] = relationship(back_populates="framework")
 
-# app/models.py (발췌)
-
 class Requirement(Base):
     __tablename__ = "requirements"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     framework_code: Mapped[str] = mapped_column(ForeignKey("frameworks.code"))
-    item_code: Mapped[str | None] = mapped_column(String(128))          # CSV: 세부항목
-    title: Mapped[str] = mapped_column(String(512))                     # 표시용 제목
-    description: Mapped[str] = mapped_column(Text)                      # CSV: 규제내용
-    mapping_status: Mapped[str | None] = mapped_column(String(64))      # CSV: 매핑여부
-    auditable: Mapped[str | None] = mapped_column(String(64))           # CSV: 감사가능
-
-    # ⬇️ 기존 64 → Text 로 확장 (예: "접근/반출 이벤트 CloudTrail Lake..." 등 64 초과)
-    audit_method: Mapped[str | None] = mapped_column(Text)              # CSV: 감사방법(AWS 콘솔/CLI)
-
-    # ⬇️ 신규 CSV 컬럼 반영
-    recommended_fix: Mapped[str | None] = mapped_column(Text)           # CSV: 권장해결(요약)
-    applicable_compliance: Mapped[str | None] = mapped_column(String(16))  # CSV: 해당컴플 (예/아니오/-)
+    item_code: Mapped[str | None] = mapped_column(String(128))          # 세부항목(예: 2.10.1.2)
+    title: Mapped[str] = mapped_column(String(512))                     # 세부항목(표시용)
+    description: Mapped[str] = mapped_column(Text)                      # 규제내용
+    mapping_status: Mapped[str | None] = mapped_column(String(64))      # 매핑여부
+    auditable: Mapped[str | None] = mapped_column(String(64))           # 감사가능
+    audit_method: Mapped[str | None] = mapped_column(String(64))        # 감사방법(AWS 콘솔/CLI)
 
     framework: Mapped["Framework"] = relationship(back_populates="requirements")
     mappings: Mapped[List["Mapping"]] = relationship(
         secondary="requirement_mapping", back_populates="requirements"
     )
-
 
 class Mapping(Base):
     __tablename__ = "mappings"
