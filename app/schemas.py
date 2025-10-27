@@ -5,33 +5,60 @@ from pydantic import BaseModel
 class FrameworkCountOut(BaseModel):
     framework: str
     count: int
+class RequirementRowOut(BaseModel):
+    id: int
+    item_code: Optional[str]
+    title: str
+    mapping_status: Optional[str]
+    regulation: Optional[str]  # = description
+    auditable: Optional[str]
+    audit_method: Optional[str]
+
+    # ✅ 새 필드 추가
+    recommended_fix: Optional[str]
+    applicable_compliance: Optional[str]
+
+    class Config:
+        orm_mode = True
+
+class MappingOut(BaseModel):
+    code: str
+    category: Optional[str]
+    service: Optional[str]
+    console_path: Optional[str]
+    check_how: Optional[str]
+    cli_cmd: Optional[str]
+    return_field: Optional[str]
+    compliant_value: Optional[str]
+    non_compliant_value: Optional[str]
+    console_fix: Optional[str]
+    cli_fix_cmd: Optional[str]
+
+    class Config:
+        orm_mode = True
 
 class RequirementRowOut(BaseModel):
     id: int
     item_code: Optional[str]
     title: str
     mapping_status: Optional[str]
-    regulation: Optional[str] = None
-    auditable: Optional[str] = None                 # ⬅ 추가(보기 용)
-    audit_method: Optional[str] = None              # ⬅ 추가
-    recommended_fix: Optional[str] = None           # ⬅ 추가
-    applicable_compliance: Optional[str] = None     # ⬅ 추가
+    regulation: Optional[str]  # = description
+    auditable: Optional[str]
+    audit_method: Optional[str]
 
-class MappingOut(BaseModel):
-    code: str
-    category: str | None = None
-    service: str | None = None
-    console_path: str | None = None
-    check_how: str | None = None
-    cli_cmd: str | None = None
-    return_field: str | None = None
-    compliant_value: str | None = None
-    non_compliant_value: str | None = None
-    console_fix: str | None = None
-    cli_fix_cmd: str | None = None
+    # ✅ 새 필드 추가
+    recommended_fix: Optional[str]
+    applicable_compliance: Optional[str]
+
+    class Config:
+        orm_mode = True
+
 
 class RequirementDetailOut(BaseModel):
     framework: str
     requirement: RequirementRowOut
-    regulation: Optional[str] = None
+    regulation: Optional[str]
     mappings: List[MappingOut]
+
+    class Config:
+        orm_mode = True

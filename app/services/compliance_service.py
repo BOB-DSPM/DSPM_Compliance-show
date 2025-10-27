@@ -30,25 +30,24 @@ def _extract_regulation_text(req: Requirement) -> Optional[str]:
                 return str(val)
     return None
 
-def list_requirements(db: Session, code: str) -> List[RequirementRowOut]:
-    fw = db.get(Framework, code)
-    if not fw:
-        return []
-    reqs = db.execute(
-        select(Requirement)
-        .where(Requirement.framework_code == code)
-        .order_by(Requirement.id)
-    ).scalars().all()
-    return [
-        RequirementRowOut(
-            id=r.id,
-            item_code=r.item_code,
-            title=r.title,
-            mapping_status=r.mapping_status,
-            regulation=_extract_regulation_text(r),  # ✅ 추가
+def list_requirements(db: Session, framework_code: str):
+    rows = (
+        db.query(
+            Requirement.id,
+            Requirement.item_code,
+            Requirement.title,
+            Requirement.mapping_status,
+            Requirement.description.label("regulation"),
+            Requirement.auditable,
+            Requirement.audit_method,
+            Requirement.recommended_fix,          # ✅ 추가
+            Requirement.applicable_compliance,     # ✅ 추가
         )
-        for r in reqs
-    ]
+        .filter(Requirement.framework_code == framework_code)
+        .order_by(Requirement.id)
+        .all()
+    )
+    return [RequirementRowOut.model_validate(r) for r in rows]
 
 def requirement_detail(db: Session, code: str, req_id: int) -> Optional[RequirementDetailOut]:
     req = db.get(Requirement, req_id)
