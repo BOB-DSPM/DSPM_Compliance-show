@@ -1,92 +1,68 @@
-import csv
-from pathlib import Path
-from sqlalchemy.orm import Session
-from app.core.db import engine, SessionLocal
-from app.models import Framework, Requirement, Mapping, RequirementMapping
-from app.core.db import Base
+# load_csv_dynamic.py
+import pandas as pd
+from sqlalchemy import create_engine, text, inspect
+from sqlalchemy.engine import Engine
 
+# === 환경설정 (여기만 프로젝트에 맞게 수정) ===
+DB_URL = "postgresql+psycopg2://USER:PASS@HOST:5432/DBNAME"
+TABLE_NAME = 'compliance_mapping'      # 기존 테이블명
+CSV_PATH = 'your_file.csv'             # 업로드할 CSV 경로
+CHUNK = 10_000                         # 대용량일 때 청크 크기
 
-Base.metadata.create_all(bind=engine)
+# === 함수들 ===
+def quote_ident(name: str) -> str:
+    """Postgres에서 한글/공백/특수문자 컬럼명 안전하게 감싸기"""
+    return '"' + name.replace('"', '""') + '"'
 
-def upsert_framework(db: Session, code: str):
-    fw = db.get(Framework, code)
-    if not fw:
-        fw = Framework(code=code, name=code)
-        db.add(fw)
-    return fw
+def add_missing_columns(engine: Engine, table: str, csv_cols: list[str]) -> None:
+    insp = inspect(engine)
+    existing_cols = {col['name'] for col in insp.get_columns(table)}
+    missing = [c for c in csv_cols if c not in existing_cols]
+    if not missing:
+        return
+    with engine.begin() as conn:
+        for col in missing:
+            # 기본 타입은 TEXT. 필요하면 맵핑 규칙으로 세분화 가능.
+            sql = f'ALTER TABLE {quote_ident(table)} ADD COLUMN {quote_ident(col)} TEXT;'
+            conn.execute(text(sql))
+    print(f"[INFO] Added columns: {missing}")
 
-def load_mappings(db: Session, mapping_csv: Path):
-    """
-    매핑 테이블 적재
-    """
-    with mapping_csv.open("r", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            code = (row.get("ID") or "").strip()
-            if not code:
-                continue
-            m = db.get(Mapping, code)
-            if not m:
-                m = Mapping(code=code)
-                db.add(m)
-            m.category = (row.get("매핑번호") or "").strip()
-            m.service = (row.get("서비스") or "").strip()
-            m.console_path = (row.get("콘솔 위치") or "").strip()
-            m.check_how = (row.get("점검/해결 방법") or "").strip()
-            m.cli_cmd = (row.get("CLI 명령어") or "").strip()
-            m.return_field = (row.get("리턴 필드 예시") or "").strip()
-            m.compliant_value = (row.get("이행(Compliant) 값") or "").strip()
-            m.non_compliant_value = (row.get("미이행(Non-Compliant) 값") or "").strip()
-            m.console_fix = (row.get("콘솔 해결 방법") or "").strip()
-            m.cli_fix_cmd = (row.get("CLI 해결 명령") or "").strip()
-    db.commit()
+def load_csv(engine: Engine, table: str, csv_path: str, chunk_size: int = 10000):
+    # 문자열로 읽어서 타입 문제 최소화
+    df_iter = pd.read_csv(
+        csv_path,
+        dtype=str,
+        keep_default_na=False,   # 빈칸을 NaN 대신 빈 문자열로
+        na_values=[],
+        encoding='utf-8-sig'
+    )
 
-def load_requirements(db: Session, req_csv: Path):
-    """
-    요건 CSV 적재 + 매핑 관계 테이블 구성
-    """
-    with req_csv.open("r", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            framework_code = (row.get("컴플라이언스") or "").strip()
-            if not framework_code:
-                continue
-            upsert_framework(db, framework_code)
+    # 헤더만 먼저 확인해서 컬럼 자동 추가
+    if isinstance(df_iter, pd.DataFrame):
+        header_cols = list(df_iter.columns)
+        add_missing_columns(engine, table, header_cols)
 
-            item_code = (row.get("세부항목") or "").strip() or None
-            title = item_code or (row.get("규제내용") or "")[:80]
-            r = Requirement(
-                framework_code=framework_code,
-                item_code=item_code,
-                title=title,
-                description=(row.get("규제내용") or "").strip(),
-                mapping_status=(row.get("매핑여부(직접매핑/해당없음)") or "").strip() or None,
-                auditable=(row.get("감사가능") or "").strip() or None,
-                audit_method=(row.get("감사방법(AWS 콘솔/CLI)") or "").strip() or None,
-            )
-            db.add(r)
-            db.flush()  # r.id 확보
+        # 업로드
+        df_iter.replace({"\u0000": ""}, regex=True, inplace=True)  # 널문자 방지
+        df_iter.to_sql(table, engine, if_exists='append', index=False, method='multi', chunksize=chunk_size)
+        print(f"[DONE] Uploaded {len(df_iter)} rows.")
+    else:
+        # pandas가 iterator를 반환하는 경우 (구버전 대응)
+        first = next(df_iter)
+        header_cols = list(first.columns)
+        add_missing_columns(engine, table, header_cols)
 
-            # 매핑ID: "1.0-01;1.0-02" 형태 지원
-            mapping_ids = (row.get("매핑ID") or "").replace(" ", "")
-            if mapping_ids:
-                for mc in mapping_ids.split(";"):
-                    if not mc:
-                        continue
-                    db.add(RequirementMapping(requirement_id=r.id, mapping_code=mc, relation_type="direct"))
-        db.commit()
-
-def main():
-    import argparse
-    p = argparse.ArgumentParser()
-    p.add_argument("--requirements", type=Path, required=True, help="요건 CSV 경로")
-    p.add_argument("--mappings", type=Path, required=True, help="매핑 CSV 경로")
-    args = p.parse_args()
-
-    with SessionLocal() as db:
-        load_mappings(db, args.mappings)
-        load_requirements(db, args.requirements)
-    print("✅ CSV 적재 완료")
+        total = 0
+        first.replace({"\u0000": ""}, regex=True, inplace=True)
+        first.to_sql(table, engine, if_exists='append', index=False, method='multi', chunksize=chunk_size)
+        total += len(first)
+        for chunk in df_iter:
+            chunk.replace({"\u0000": ""}, regex=True, inplace=True)
+            chunk.to_sql(table, engine, if_exists='append', index=False, method='multi', chunksize=chunk_size)
+            total += len(chunk)
+        print(f"[DONE] Uploaded {total} rows.")
 
 if __name__ == "__main__":
-    main()
+    engine = create_engine(DB_URL, pool_pre_ping=True, future=True)
+    # CSV 컬럼에 따옴표/공백/한글이 포함되어도 그대로 컬럼명으로 사용합니다.
+    load_csv(engine, TABLE_NAME, CSV_PATH, CHUNK)
