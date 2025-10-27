@@ -3,12 +3,19 @@ from __future__ import annotations
 from typing import List, Optional
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
-from ..models import Framework, Requirement, Mapping
-from ..schemas import FrameworkCountOut, RequirementRowOut, MappingOut, RequirementDetailOut
+from ..models import Framework, Requirement, Mapping, RequirementMapping
+from ..schemas import (
+    FrameworkCountOut,
+    RequirementRowOut,
+    MappingOut,
+    RequirementDetailOut,
+)
 
 def ensure_tables(engine) -> None:
+    """로컬/테스트 환경에서 스키마 자동 생성(운영은 마이그레이션 권장)."""
     from ..core.db import Base
     Base.metadata.create_all(bind=engine)
+
 
 def framework_counts(db: Session) -> List[FrameworkCountOut]:
     rows = db.execute(
@@ -17,6 +24,7 @@ def framework_counts(db: Session) -> List[FrameworkCountOut]:
         .order_by(Requirement.framework_code)
     ).all()
     return [FrameworkCountOut(framework=f, count=c) for (f, c) in rows]
+
 
 def _extract_regulation_text(req: Requirement) -> Optional[str]:
     """
@@ -30,56 +38,54 @@ def _extract_regulation_text(req: Requirement) -> Optional[str]:
                 return str(val)
     return None
 
-def list_requirements(db: Session, framework_code: str):
+
+def list_requirements(db: Session, framework_code: str) -> List[RequirementRowOut]:
+    """
+    목록은 SELECT 컬럼 지정 + Row → dict(_mapping) → model_validate()로 구성.
+    (Pydantic v2는 Row 자체는 못 파싱하므로 dict 변환 필요)
+    """
     rows = (
         db.query(
-            Requirement.id,
-            Requirement.item_code,
-            Requirement.title,
-            Requirement.mapping_status,
+            Requirement.id.label("id"),
+            Requirement.item_code.label("item_code"),
+            Requirement.title.label("title"),
+            Requirement.mapping_status.label("mapping_status"),
             Requirement.description.label("regulation"),
-            Requirement.auditable,
-            Requirement.audit_method,
-            Requirement.recommended_fix,          # ✅ 추가
-            Requirement.applicable_compliance,     # ✅ 추가
+            Requirement.auditable.label("auditable"),
+            Requirement.audit_method.label("audit_method"),
+            Requirement.recommended_fix.label("recommended_fix"),
+            Requirement.applicable_compliance.label("applicable_compliance"),
         )
         .filter(Requirement.framework_code == framework_code)
         .order_by(Requirement.id)
         .all()
     )
-    return [RequirementRowOut.model_validate(r) for r in rows]
+    return [RequirementRowOut.model_validate(dict(r._mapping)) for r in rows]
+
 
 def requirement_detail(db: Session, code: str, req_id: int) -> Optional[RequirementDetailOut]:
-    req = db.get(Requirement, req_id)
-    if not req or req.framework_code != code:
+    """
+    디테일은 ORM 객체를 그대로 Pydantic에 넘깁니다(from_attributes=True).
+    """
+    req = (
+        db.query(Requirement)
+        .filter(Requirement.framework_code == code, Requirement.id == req_id)
+        .first()
+    )
+    if not req:
         return None
 
-    maps = [
-        MappingOut(
-            code=m.code,
-            category=m.category,
-            service=m.service,
-            console_path=m.console_path,
-            check_how=m.check_how,
-            cli_cmd=m.cli_cmd,
-            return_field=m.return_field,
-            compliant_value=m.compliant_value,
-            non_compliant_value=m.non_compliant_value,
-            console_fix=m.console_fix,
-            cli_fix_cmd=m.cli_fix_cmd,
-        )
-        for m in req.mappings
-    ]
+    # 매핑들 조회 (중간 테이블 통해 연결)
+    maps = (
+        db.query(Mapping)
+        .join(RequirementMapping, RequirementMapping.mapping_code == Mapping.code)
+        .filter(RequirementMapping.requirement_id == req.id)
+        .all()
+    )
 
     return RequirementDetailOut(
         framework=req.framework_code,
-        requirement=RequirementRowOut(
-            id=req.id,
-            item_code=req.item_code,
-            title=req.title,
-            mapping_status=req.mapping_status,
-            regulation=_extract_regulation_text(req),  # ✅ 디테일에서도 동일 소스
-        ),
-        regulation=_extract_regulation_text(req),  # (호환용 필드 유지)
-        mappings=maps,
+        regulation=_extract_regulation_text(req),  # (호환용 필드)
+        requirement=RequirementRowOut.model_validate(req),
+        mappings=[MappingOut.model_validate(m) for m in maps],
     )

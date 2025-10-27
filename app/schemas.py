@@ -1,64 +1,54 @@
+# app/schemas.py
 from __future__ import annotations
-from typing import List, Optional
-from pydantic import BaseModel
+from typing import Optional, List
+from pydantic import BaseModel, ConfigDict
+
+# ✅ Pydantic v2: orm_mode 대신 from_attributes 사용
+FROM_ATTRS = ConfigDict(from_attributes=True)
+
 
 class FrameworkCountOut(BaseModel):
     framework: str
     count: int
+    model_config = FROM_ATTRS
+
+
 class RequirementRowOut(BaseModel):
     id: int
-    item_code: Optional[str]
+    item_code: Optional[str] = None
     title: str
-    mapping_status: Optional[str]
-    regulation: Optional[str]  # = description
-    auditable: Optional[str]
-    audit_method: Optional[str]
+    mapping_status: Optional[str] = None
+    regulation: Optional[str] = None  # (= description)
+    auditable: Optional[str] = None
+    audit_method: Optional[str] = None
 
-    # ✅ 새 필드 추가
-    recommended_fix: Optional[str]
-    applicable_compliance: Optional[str]
+    # ✅ 새 필드
+    recommended_fix: Optional[str] = None
+    applicable_compliance: Optional[str] = None
 
-    class Config:
-        orm_mode = True
+    model_config = FROM_ATTRS
+
 
 class MappingOut(BaseModel):
     code: str
-    category: Optional[str]
-    service: Optional[str]
-    console_path: Optional[str]
-    check_how: Optional[str]
-    cli_cmd: Optional[str]
-    return_field: Optional[str]
-    compliant_value: Optional[str]
-    non_compliant_value: Optional[str]
-    console_fix: Optional[str]
-    cli_fix_cmd: Optional[str]
+    category: Optional[str] = None
+    service: Optional[str] = None
+    console_path: Optional[str] = None
+    check_how: Optional[str] = None
+    cli_cmd: Optional[str] = None
+    return_field: Optional[str] = None
+    compliant_value: Optional[str] = None
+    non_compliant_value: Optional[str] = None
+    console_fix: Optional[str] = None
+    cli_fix_cmd: Optional[str] = None
 
-    class Config:
-        orm_mode = True
-
-class RequirementRowOut(BaseModel):
-    id: int
-    item_code: Optional[str]
-    title: str
-    mapping_status: Optional[str]
-    regulation: Optional[str]  # = description
-    auditable: Optional[str]
-    audit_method: Optional[str]
-
-    # ✅ 새 필드 추가
-    recommended_fix: Optional[str]
-    applicable_compliance: Optional[str]
-
-    class Config:
-        orm_mode = True
+    model_config = FROM_ATTRS
 
 
 class RequirementDetailOut(BaseModel):
     framework: str
     requirement: RequirementRowOut
-    regulation: Optional[str]
+    regulation: Optional[str] = None
     mappings: List[MappingOut]
 
-    class Config:
-        orm_mode = True
+    model_config = FROM_ATTRS
