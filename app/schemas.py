@@ -12,6 +12,10 @@ class RequirementRowOut(BaseModel):
     title: str
     mapping_status: Optional[str]
     regulation: Optional[str] = None
+    auditable: Optional[str] = None                 # ⬅ 추가(보기 용)
+    audit_method: Optional[str] = None              # ⬅ 추가
+    recommended_fix: Optional[str] = None           # ⬅ 추가
+    applicable_compliance: Optional[str] = None     # ⬅ 추가
 
 class MappingOut(BaseModel):
     code: str
