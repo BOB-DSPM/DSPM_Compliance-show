@@ -30,9 +30,9 @@ class Requirement(Base):
         secondary="requirement_mapping", back_populates="requirements"
     )
 
-    # ⬇️ 새 관계: 위협 그룹들
-    threat_groups: Mapped[List["ThreatGroup"]] = relationship(
-        secondary="threat_group_map", back_populates="requirements"
+    threat_groups: Mapped[list["ThreatGroup"]] = relationship(
+        secondary="threat_group_map",
+        back_populates="requirements",
     )
 
 class Mapping(Base):
@@ -59,16 +59,23 @@ class RequirementMapping(Base):
     mapping_code: Mapped[str] = mapped_column(ForeignKey("mappings.code"), primary_key=True)
     relation_type: Mapped[str] = mapped_column(String(16), default="direct")  # direct/partial/na
 
-# ⬇️ 새 테이블들
 class ThreatGroup(Base):
     __tablename__ = "threat_groups"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(128), unique=True)
-    requirements: Mapped[List["Requirement"]] = relationship(
-        secondary="threat_group_map", back_populates="threat_groups"
+    name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+
+    # 역방향: 이 그룹에 속한 SAGE-Threat requirements
+    requirements: Mapped[list["Requirement"]] = relationship(
+        secondary="threat_group_map",
+        back_populates="threat_groups",
     )
+
 
 class ThreatGroupMap(Base):
     __tablename__ = "threat_group_map"
-    group_id: Mapped[int] = mapped_column(ForeignKey("threat_groups.id"), primary_key=True)
-    requirement_id: Mapped[int] = mapped_column(ForeignKey("requirements.id"), primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("threat_groups.id", ondelete="CASCADE"), primary_key=True)
+    requirement_id: Mapped[int] = mapped_column(ForeignKey("requirements.id", ondelete="CASCADE"), primary_key=True)
+
+    __table_args__ = (
+        UniqueConstraint("group_id", "requirement_id", name="uq_group_req"),
+    )
