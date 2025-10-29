@@ -1,3 +1,4 @@
+# app/models.py
 from __future__ import annotations
 from typing import List
 from sqlalchemy import String, Text, ForeignKey
@@ -10,35 +11,34 @@ class Framework(Base):
     name: Mapped[str] = mapped_column(String(128))
     requirements: Mapped[List["Requirement"]] = relationship(back_populates="framework")
 
-# app/models.py (발췌)
-
 class Requirement(Base):
     __tablename__ = "requirements"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     framework_code: Mapped[str] = mapped_column(ForeignKey("frameworks.code"))
-    item_code: Mapped[str | None] = mapped_column(String(128))          # CSV: 세부항목
-    title: Mapped[str] = mapped_column(String(512))                     # 표시용 제목
-    description: Mapped[str] = mapped_column(Text)                      # CSV: 규제내용
-    mapping_status: Mapped[str | None] = mapped_column(String(64))      # CSV: 매핑여부
-    auditable: Mapped[str | None] = mapped_column(String(64))           # CSV: 감사가능
-
-    # ⬇️ 기존 64 → Text 로 확장 (예: "접근/반출 이벤트 CloudTrail Lake..." 등 64 초과)
-    audit_method: Mapped[str | None] = mapped_column(Text)              # CSV: 감사방법(AWS 콘솔/CLI)
-
-    # ⬇️ 신규 CSV 컬럼 반영
-    recommended_fix: Mapped[str | None] = mapped_column(Text)           # CSV: 권장해결(요약)
-    applicable_compliance: Mapped[str | None] = mapped_column(String(16))  # CSV: 해당컴플 (예/아니오/-)
+    item_code: Mapped[str | None] = mapped_column(String(128))
+    title: Mapped[str] = mapped_column(String(512))
+    description: Mapped[str] = mapped_column(Text)
+    mapping_status: Mapped[str | None] = mapped_column(String(64))
+    auditable: Mapped[str | None] = mapped_column(String(64))
+    audit_method: Mapped[str | None] = mapped_column(Text)
+    recommended_fix: Mapped[str | None] = mapped_column(Text)
+    applicable_compliance: Mapped[str | None] = mapped_column(String(16))
 
     framework: Mapped["Framework"] = relationship(back_populates="requirements")
+
     mappings: Mapped[List["Mapping"]] = relationship(
         secondary="requirement_mapping", back_populates="requirements"
     )
 
+    # ⬇️ 새 관계: 위협 그룹들
+    threat_groups: Mapped[List["ThreatGroup"]] = relationship(
+        secondary="threat_group_map", back_populates="requirements"
+    )
 
 class Mapping(Base):
     __tablename__ = "mappings"
-    code: Mapped[str] = mapped_column(String(16), primary_key=True)     # 예: 1.0-01
-    category: Mapped[str | None] = mapped_column(String(64))            # 예: 1 (접근제어/..)
+    code: Mapped[str] = mapped_column(String(16), primary_key=True)
+    category: Mapped[str | None] = mapped_column(String(64))
     service: Mapped[str | None] = mapped_column(String(64))
     console_path: Mapped[str | None] = mapped_column(Text)
     check_how: Mapped[str | None] = mapped_column(Text)
@@ -58,3 +58,17 @@ class RequirementMapping(Base):
     requirement_id: Mapped[int] = mapped_column(ForeignKey("requirements.id"), primary_key=True)
     mapping_code: Mapped[str] = mapped_column(ForeignKey("mappings.code"), primary_key=True)
     relation_type: Mapped[str] = mapped_column(String(16), default="direct")  # direct/partial/na
+
+# ⬇️ 새 테이블들
+class ThreatGroup(Base):
+    __tablename__ = "threat_groups"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True)
+    requirements: Mapped[List["Requirement"]] = relationship(
+        secondary="threat_group_map", back_populates="threat_groups"
+    )
+
+class ThreatGroupMap(Base):
+    __tablename__ = "threat_group_map"
+    group_id: Mapped[int] = mapped_column(ForeignKey("threat_groups.id"), primary_key=True)
+    requirement_id: Mapped[int] = mapped_column(ForeignKey("requirements.id"), primary_key=True)

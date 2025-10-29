@@ -22,7 +22,6 @@ class ApplicableComplianceHitOut(BaseModel):
     raw: str
     code: Optional[str] = None
     title: Optional[str] = None
-    # ⚠️ 가변 기본값은 default_factory
     matches: List[RequirementMiniOut] = Field(default_factory=list)
 
 class RequirementRowOut(BaseModel):
@@ -35,9 +34,12 @@ class RequirementRowOut(BaseModel):
     audit_method: Optional[str] = None
     recommended_fix: Optional[str] = None
     applicable_compliance: Optional[str] = None
+    # ⬇️ 추가: 이 위협 항목이 속한 그룹들
+    threat_groups: Optional[List[str]] = None
+
     # SAGE-Threat(정방향)
     applicable_hits: Optional[List[ApplicableComplianceHitOut]] = None
-    # ✅ 역방향(컴플라이언스 → 관련 위협들)
+    # 역방향(컴플라이언스 → 관련 위협들)
     threat_hits: Optional[List[RequirementMiniOut]] = None
     model_config = FROM_ATTRS
 
