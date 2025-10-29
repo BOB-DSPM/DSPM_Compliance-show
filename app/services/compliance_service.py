@@ -136,7 +136,6 @@ def list_requirements(db: Session, framework_code: str) -> List[RequirementRowOu
             out.append(model.model_copy(update={"applicable_hits": hits}))
         return out
 
-    # 다른 프레임워크: 역방향
     stmt = (
         select(
             Requirement.id.label("id"),
@@ -148,18 +147,24 @@ def list_requirements(db: Session, framework_code: str) -> List[RequirementRowOu
             Requirement.audit_method.label("audit_method"),
             Requirement.recommended_fix.label("recommended_fix"),
             Requirement.applicable_compliance.label("applicable_compliance"),
+            func.group_concat(ThreatGroup.name, ",").label("grp_csv"),
         )
-        .where(Requirement.framework_code == framework_code)
+        .select_from(Requirement)
+        .join(ThreatGroupMap, ThreatGroupMap.requirement_id == Requirement.id, isouter=True)
+        .join(ThreatGroup, ThreatGroup.id == ThreatGroupMap.group_id, isouter=True)
+        .where(Requirement.framework_code == "SAGE-Threat")
+        .group_by(Requirement.id)
         .order_by(Requirement.id)
     )
     rows = db.execute(stmt).all()
-    models = [RequirementRowOut.model_validate(dict(r._mapping)) for r in rows]
-
-    enriched: List[RequirementRowOut] = []
-    for m in models:
-        th = _find_threats_for_requirement(db, m.item_code, m.title)
-        enriched.append(m.model_copy(update={"threat_hits": th}))
-    return enriched
+    out = []
+    for r in rows:
+        data = dict(r._mapping)
+        groups = [g for g in (data.pop("grp_csv") or "").split(",") if g]
+        model = RequirementRowOut.model_validate({**data, "threat_groups": groups})
+        hits = _build_applicable_hits(db, model.applicable_compliance)
+        out.append(model.model_copy(update={"applicable_hits": hits}))
+    return out
 
 def requirement_detail(db: Session, code: str, req_id: int) -> Optional[RequirementDetailOut]:
     req = (
