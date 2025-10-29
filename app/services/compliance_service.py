@@ -50,31 +50,26 @@ def _parse_code_title(token: str) -> tuple[Optional[str], Optional[str]]:
     title = (m.group(2) or "").strip() or None
     return code, title
 
+def _mini_from_row(r: Requirement) -> RequirementMiniOut:
+    return RequirementMiniOut(
+        id=r.id,
+        framework_code=r.framework_code,
+        item_code=r.item_code,
+        title=r.title,
+        regulation=_extract_regulation_text(r) or getattr(r, "description", None),
+    )
+
 def _query_matches_for_token(db: Session, code: Optional[str], title: Optional[str]) -> List[RequirementMiniOut]:
     q = db.query(Requirement).filter(Requirement.framework_code != "SAGE-Threat")
     conds = []
     if code:
         conds.append(Requirement.item_code == code)
     if title:
-        # 느슨한 제목 매칭(부분 일치). 필요 시 정규화/키워드 매핑 테이블로 고도화 가능
         conds.append(Requirement.title.ilike(f"%{title}%"))
-
     if not conds:
         return []
-
     rows = q.filter(or_(*conds)).order_by(Requirement.framework_code, Requirement.id).all()
-    out: List[RequirementMiniOut] = []
-    for r in rows:
-        out.append(
-            RequirementMiniOut(
-                id=r.id,
-                framework_code=r.framework_code,
-                item_code=r.item_code,
-                title=r.title,
-                regulation=_extract_regulation_text(r) or getattr(r, "description", None),
-            )
-        )
-    return out
+    return [_mini_from_row(r) for r in rows]
 
 def _build_applicable_hits(db: Session, applicable_compliance: Optional[str]) -> List[ApplicableComplianceHitOut]:
     hits: List[ApplicableComplianceHitOut] = []
@@ -83,6 +78,34 @@ def _build_applicable_hits(db: Session, applicable_compliance: Optional[str]) ->
         matches = _query_matches_for_token(db, code, title)
         hits.append(ApplicableComplianceHitOut(raw=token, code=code, title=title, matches=matches))
     return hits
+
+# ✅ 역방향(컴플라이언스 → 위협들): DB 수정 없이 문자열 검색만
+def _find_threats_for_requirement(db: Session, item_code: Optional[str], title: Optional[str]) -> List[RequirementMiniOut]:
+    """
+    - SAGE-Threat.applicable_compliance 내에 컴플라이언스의 item_code 또는 title 조각이 포함되어 있으면 히트
+    - DB/스키마 변경 없이 ILIKE %%검색%% 만 사용
+    """
+    conds = []
+    if item_code:
+        conds.append(Requirement.applicable_compliance.ilike(f"%{item_code}%"))
+    if title:
+        # 너무 긴 제목은 일부만; 간단 키워드 매칭
+        key = title.strip()
+        if len(key) > 64:
+            key = key[:64]
+        conds.append(Requirement.applicable_compliance.ilike(f"%{key}%"))
+
+    if not conds:
+        return []
+
+    rows = (
+        db.query(Requirement)
+        .filter(Requirement.framework_code == "SAGE-Threat")
+        .filter(or_(*conds))
+        .order_by(Requirement.id)
+        .all()
+    )
+    return [_mini_from_row(r) for r in rows]
 
 def list_requirements(db: Session, framework_code: str) -> List[RequirementRowOut]:
     rows = (
@@ -103,14 +126,20 @@ def list_requirements(db: Session, framework_code: str) -> List[RequirementRowOu
     )
     models = [RequirementRowOut.model_validate(dict(r._mapping)) for r in rows]
 
-    # ✅ SAGE-Threat면 applicable_compliance 토큰별로 같은 DB에서 재조회
     if framework_code == "SAGE-Threat":
+        # 정방향(위협 → 컴플라이언스)
         enriched: List[RequirementRowOut] = []
         for m in models:
             hits = _build_applicable_hits(db, m.applicable_compliance)
             enriched.append(m.model_copy(update={"applicable_hits": hits}))
         return enriched
-    return models
+
+    # ✅ 역방향(컴플라이언스 → 위협)
+    enriched: List[RequirementRowOut] = []
+    for m in models:
+        th = _find_threats_for_requirement(db, m.item_code, m.title)
+        enriched.append(m.model_copy(update={"threat_hits": th}))
+    return enriched
 
 def requirement_detail(db: Session, code: str, req_id: int) -> Optional[RequirementDetailOut]:
     req = (
@@ -129,9 +158,15 @@ def requirement_detail(db: Session, code: str, req_id: int) -> Optional[Requirem
     )
 
     req_out = RequirementRowOut.model_validate(req)
+
     if code == "SAGE-Threat":
+        # 정방향
         hits = _build_applicable_hits(db, getattr(req, "applicable_compliance", None))
         req_out = req_out.model_copy(update={"applicable_hits": hits})
+    else:
+        # ✅ 역방향(컴플라이언스 → 위협)
+        th = _find_threats_for_requirement(db, req.item_code, req.title)
+        req_out = req_out.model_copy(update={"threat_hits": th})
 
     return RequirementDetailOut(
         framework=req.framework_code,
