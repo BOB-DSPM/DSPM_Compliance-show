@@ -58,3 +58,20 @@ class RequirementMapping(Base):
     requirement_id: Mapped[int] = mapped_column(ForeignKey("requirements.id"), primary_key=True)
     mapping_code: Mapped[str] = mapped_column(ForeignKey("mappings.code"), primary_key=True)
     relation_type: Mapped[str] = mapped_column(String(16), default="direct")  # direct/partial/na
+
+class ThreatGroup(Base):
+    __tablename__ = "threat_groups"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True, index=True)  # 예: "권한/계정 관리 문제"
+    threats: Mapped[List["Threat"]] = relationship(back_populates="group", cascade="all, delete-orphan")
+
+class Threat(Base):
+    __tablename__ = "threats"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("threat_groups.id"))
+    title: Mapped[str] = mapped_column(String(512))  # 예: "내부자 과도한 권한 및 오남용"
+    group: Mapped["ThreatGroup"] = relationship(back_populates="threats")
+
+    __table_args__ = (
+        UniqueConstraint("group_id", "title", name="uq_threat_group_title"),
+    )
