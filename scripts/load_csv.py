@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-# scripts/load_csv.py (now with ThreatGroup loader: --treat / --threat-groups)
+# scripts/load_csv.py (improved with '권장해결(요약)', '해당컴플' support)
 # - CSV/TSV 자동 구분, 인코딩 지정 가능
-# - 재실행 안전(Idempotent)
+# - 재실행 안전(Idempotent): 기존 Framework/Mapping/Requirement/관계 중복 방지
 # - 대용량 대응: 배치 커밋, bulk insert
 # - 유연한 헤더 매핑(한글/공백/대소문자 차이 흡수)
 # - 드라이런/부분 업데이트/요건-매핑 관계 중복 제거
 # - 요약 통계 출력
 # - ✅ requirements.recommended_fix / requirements.applicable_compliance 적재 지원
-# - ✅ threat_groups.csv("위협 그룹","위협") 적재 지원 → SAGE-Threat 요건과 그룹 매핑(위협 다중값 ;/ , 분리)
 
 from __future__ import annotations
 
@@ -18,12 +17,9 @@ from pathlib import Path
 from typing import Iterable, List, Dict, Tuple, Optional, Any, Set
 
 from sqlalchemy.orm import Session
-from sqlalchemy import select, or_
+from sqlalchemy import select
 from app.core.db import engine, SessionLocal
-from app.models import (
-    Framework, Requirement, Mapping, RequirementMapping,
-    ThreatGroup, ThreatGroupMap,
-)
+from app.models import Framework, Requirement, Mapping, RequirementMapping
 from app.core.db import Base
 
 
@@ -76,15 +72,6 @@ MAP_SPEC = HeaderSpec(
         "미이행(Non-Compliant) 값": ["미이행(Non-Compliant) 값", "non_compliant_value"],
         "콘솔 해결 방법": ["콘솔 해결 방법", "console_fix"],
         "CLI 해결 명령": ["CLI 해결 명령", "cli_fix_cmd"],
-    },
-)
-
-# ✅ ThreatGroup CSV 헤더 스펙
-THREAT_SPEC = HeaderSpec(
-    required=["위협 그룹", "위협"],
-    aliases={
-        "위협 그룹": ["위협 그룹", "그룹", "threat_group", "group"],
-        "위협": ["위협", "threat", "위협명", "title"],
     },
 )
 
@@ -144,26 +131,6 @@ def split_mapping_ids(val: str) -> List[str]:
     # "1.0-01; 1.0-02 ;" -> ["1.0-01","1.0-02"]
     parts = [p.strip() for p in val.replace(",", ";").split(";")]
     return [p for p in parts if p]
-
-def split_multi(val: str) -> List[str]:
-    """
-    "a;b;c" 또는 "a, b, c" 형태의 다중 값을 ; / , 모두 구분자로 분리.
-    공백/중복 제거 및 입력 순서 유지.
-    """
-    if not val:
-        return []
-    parts = []
-    for seg in val.replace("\n", " ").split(";"):
-        for seg2 in seg.split(","):
-            s = seg2.strip()
-            if s:
-                parts.append(s)
-    seen, out = set(), []
-    for p in parts:
-        if p not in seen:
-            seen.add(p)
-            out.append(p)
-    return out
 
 # =========================
 # 업서트/로더 로직
@@ -312,28 +279,6 @@ def attach_requirement_mappings(
         db.bulk_save_objects(news)
     return len(news)
 
-# ===== ThreatGroup 업서트/로더 =====
-
-def upsert_threat_group(db: Session, name: str) -> ThreatGroup:
-    tg = db.execute(select(ThreatGroup).where(ThreatGroup.name == name)).scalars().first()
-    if not tg:
-        tg = ThreatGroup(name=name)
-        db.add(tg)
-        db.flush()
-    return tg
-
-def attach_threat_group_map(db: Session, group_id: int, requirement_id: int) -> bool:
-    exists = db.execute(
-        select(ThreatGroupMap).where(
-            ThreatGroupMap.group_id == group_id,
-            ThreatGroupMap.requirement_id == requirement_id
-        )
-    ).scalars().first()
-    if exists:
-        return False
-    db.add(ThreatGroupMap(group_id=group_id, requirement_id=requirement_id))
-    return True
-
 # =========================
 # CSV 로더
 # =========================
@@ -399,62 +344,6 @@ def load_requirements(db: Session, req_csv: Path, dialect: Dict[str, Any], encod
 
         log(f"Requirements: total={total_req}, created={created_req}, updated={total_req - created_req}, links_added={linked_rel}")
 
-def load_threat_groups(db: Session, threat_csv: Path, dialect: Dict[str, Any], encoding: str):
-    """
-    threat_groups.csv 예시:
-        위협 그룹,위협
-        권한/계정 관리 문제,"내부자 과도한 권한 및 오남용;권한 없는 사용자 개인정보 열람;..."
-    '위협' 컬럼 값은 SAGE-Threat Requirement.title 또는 item_code 와 정확 일치 기준.
-    한 셀에 다중 위협이 ';' 또는 ',' 로 구분되어 있을 수 있음.
-    """
-    with threat_csv.open("r", encoding=encoding, newline="") as f:
-        reader = csv.DictReader(f, **dialect)
-        hdrmap = normalize_header_map(reader.fieldnames or [], THREAT_SPEC)
-
-        total_rows, linked_pairs, missing_req = 0, 0, 0
-        for row in reader:
-            total_rows += 1
-            grp = getv(row, hdrmap, "위협 그룹")
-            th_raw = getv(row, hdrmap, "위협")
-            if not grp or not th_raw:
-                continue
-
-            for th_title in split_multi(th_raw):
-                # SAGE-Threat 요건 찾기: title 혹은 item_code 일치
-                req = (
-                    db.execute(
-                        select(Requirement).where(
-                            Requirement.framework_code == "SAGE-Threat",
-                            or_(
-                                Requirement.title == th_title,
-                                Requirement.item_code == th_title
-                            )
-                        )
-                    ).scalars().first()
-                )
-                if not req:
-                    # 공백/대소문자 차이 완화
-                    req = (
-                        db.execute(
-                            select(Requirement).where(
-                                Requirement.framework_code == "SAGE-Threat",
-                                or_(
-                                    Requirement.title.ilike(th_title.strip()),
-                                    Requirement.item_code.ilike(th_title.strip())
-                                )
-                            )
-                        ).scalars().first()
-                    )
-                if not req:
-                    missing_req += 1
-                    continue
-
-                tg = upsert_threat_group(db, grp)
-                if attach_threat_group_map(db, tg.id, req.id):
-                    linked_pairs += 1
-
-        log(f"ThreatGroups: rows={total_rows}, links_added={linked_pairs}, missing_requirements={missing_req}")
-
 # =========================
 # 메인
 # =========================
@@ -463,14 +352,11 @@ def main():
     parser = argparse.ArgumentParser(description="CSV → SQLite(Postgres도 OK) 로더 (재실행 안전/자동 매핑)")
     parser.add_argument("--requirements", type=Path, required=True, help="요건 CSV/TSV 경로")
     parser.add_argument("--mappings", type=Path, required=True, help="매핑 CSV/TSV 경로")
-    # ✅ ThreatGroup CSV (alias 지원)
-    parser.add_argument("--treat", type=Path, dest="threat_csv", help="위협그룹 CSV/TSV 경로 (예: threat_groups.csv)")
-    parser.add_argument("--threat-groups", type=Path, dest="threat_csv", help="위협그룹 CSV/TSV 경로 (예: threat_groups.csv)")
     parser.add_argument("--encoding", default="utf-8-sig", help="입력 파일 인코딩 (기본: utf-8-sig)")
     parser.add_argument("--format", choices=["auto", "csv", "tsv"], default="auto", help="파일 포맷 강제 (기본: auto)")
     parser.add_argument("--merge-mode", choices=["overwrite", "fill"], default="overwrite",
                         help="overwrite=항상 덮어씀, fill=기존값이 빈 칸일 때만 채움")
-    parser.add_argument("--commit-every", type=int, default=5000, help="N행마다 커밋 (대용량 안정성) [보류]")
+    parser.add_argument("--commit-every", type=int, default=5000, help="N행마다 커밋 (대용량 안정성)")
     parser.add_argument("--dry-run", action="store_true", help="DB 변경 없이 파싱만 수행")
     args = parser.parse_args()
 
@@ -480,14 +366,9 @@ def main():
     # 파일 포맷/인코딩
     req_dialect = auto_dialect(args.requirements, None if args.format == "auto" else args.format)
     map_dialect = auto_dialect(args.mappings, None if args.format == "auto" else args.format)
-    th_dialect = None
-    if args.threat_csv:
-        th_dialect = auto_dialect(args.threat_csv, None if args.format == "auto" else args.format)
 
     log(f"requirements: {args.requirements} ({args.encoding}, {req_dialect})")
     log(f"mappings:     {args.mappings} ({args.encoding}, {map_dialect})")
-    if args.threat_csv:
-        log(f"threats:      {args.threat_csv} ({args.encoding}, {th_dialect})")
     log(f"merge_mode={args.merge_mode}, dry_run={args.dry_run}")
 
     if args.dry_run:
@@ -497,10 +378,6 @@ def main():
         with args.requirements.open("r", encoding=args.encoding, newline="") as f:
             reader = csv.DictReader(f, **req_dialect)
             _ = normalize_header_map(reader.fieldnames or [], REQ_SPEC)
-        if args.threat_csv:
-            with args.threat_csv.open("r", encoding=args.encoding, newline="") as f:
-                reader = csv.DictReader(f, **(th_dialect or {}))
-                _ = normalize_header_map(reader.fieldnames or [], THREAT_SPEC)
         log("DRY-RUN OK (헤더 매핑 검증 완료)")
         return
 
@@ -512,11 +389,6 @@ def main():
         # 2) 요건+관계 (+권장해결/해당컴플)
         load_requirements(db, args.requirements, req_dialect, args.encoding, merge_mode=args.merge_mode)
         db.commit()
-
-        # 3) 위협 그룹 매핑 (선택)
-        if args.threat_csv:
-            load_threat_groups(db, args.threat_csv, th_dialect or {}, args.encoding)
-            db.commit()
 
     log("✅ CSV 적재 완료")
 

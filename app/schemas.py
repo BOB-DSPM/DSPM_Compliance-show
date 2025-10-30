@@ -1,7 +1,7 @@
 # app/schemas.py
 from __future__ import annotations
 from typing import Optional, List
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 FROM_ATTRS = ConfigDict(from_attributes=True)
 
@@ -19,10 +19,10 @@ class RequirementMiniOut(BaseModel):
     model_config = FROM_ATTRS
 
 class ApplicableComplianceHitOut(BaseModel):
-    raw: str
-    code: Optional[str] = None
-    title: Optional[str] = None
-    matches: List[RequirementMiniOut] = Field(default_factory=list)
+    raw: str                          # 원본 토큰 (“7.4.3 Accuracy and quality”)
+    code: Optional[str] = None        # 파싱된 코드 (“7.4.3”)
+    title: Optional[str] = None       # 파싱된 제목 (“Accuracy and quality”)
+    matches: List[RequirementMiniOut] = []   # 같은 DB에서 재조회된 매칭 결과(0..N)
 
 class RequirementRowOut(BaseModel):
     id: int
@@ -34,13 +34,8 @@ class RequirementRowOut(BaseModel):
     audit_method: Optional[str] = None
     recommended_fix: Optional[str] = None
     applicable_compliance: Optional[str] = None
-    # ⬇️ 추가: 이 위협 항목이 속한 그룹들
-    threat_groups: Optional[List[str]] = None
-
-    # SAGE-Threat(정방향)
+    # ✅ SAGE-Threat 전용 확장 필드
     applicable_hits: Optional[List[ApplicableComplianceHitOut]] = None
-    # 역방향(컴플라이언스 → 관련 위협들)
-    threat_hits: Optional[List[RequirementMiniOut]] = None
     model_config = FROM_ATTRS
 
 class MappingOut(BaseModel):
@@ -63,11 +58,3 @@ class RequirementDetailOut(BaseModel):
     regulation: Optional[str] = None
     mappings: List[MappingOut]
     model_config = FROM_ATTRS
-    threat_groups: list[ThreatGroupOut] | None = None
-    class Config: orm_mode = True
-
-
-class ThreatGroupOut(BaseModel):
-    id: int
-    name: str
-    class Config: orm_mode = True
