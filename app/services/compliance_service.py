@@ -158,6 +158,7 @@ def requirement_detail(db: Session, code: str, req_id: int) -> Optional[Requirem
         requirement=req_out,  # 내부에도 regulation 주입됨
         mappings=[MappingOut.model_validate(m) for m in maps],
     )
+
 # -----------------------------
 # ThreatGroup 매핑(그룹명 추가)
 # -----------------------------
