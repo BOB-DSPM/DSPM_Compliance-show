@@ -99,9 +99,16 @@ def _build_applicable_hits(db: Session, applicable_compliance: Optional[str]) ->
     return hits
 
 # -----------------------------
-# 기본 목록/상세 (원형 유지)
+# 기본 목록/상세
 # -----------------------------
 def list_requirements(db: Session, framework_code: str) -> List[RequirementRowOut]:
+    """
+    목록 API에서 각 항목별 매핑 코드들을 함께 반환한다.
+    - SQLite: group_concat 사용
+    - 다른 DB 사용 시 string_agg로 교체 필요
+    """
+    mapping_codes_csv = func.group_concat(RequirementMapping.mapping_code, ";")
+
     rows = (
         db.query(
             Requirement.id.label("id"),
@@ -113,12 +120,40 @@ def list_requirements(db: Session, framework_code: str) -> List[RequirementRowOu
             Requirement.audit_method.label("audit_method"),
             Requirement.recommended_fix.label("recommended_fix"),
             Requirement.applicable_compliance.label("applicable_compliance"),
+            mapping_codes_csv.label("mapping_codes_csv"),
+        )
+        .outerjoin(
+            RequirementMapping,
+            RequirementMapping.requirement_id == Requirement.id,
         )
         .filter(Requirement.framework_code == framework_code)
+        .group_by(
+            Requirement.id,
+            Requirement.item_code,
+            Requirement.title,
+            Requirement.mapping_status,
+            Requirement.description,
+            Requirement.auditable,
+            Requirement.audit_method,
+            Requirement.recommended_fix,
+            Requirement.applicable_compliance,
+        )
         .order_by(Requirement.id)
         .all()
     )
-    models = [RequirementRowOut.model_validate(dict(r._mapping)) for r in rows]
+
+    models: List[RequirementRowOut] = []
+    for r in rows:
+        d = dict(r._mapping)
+        # 정규화된 regulation 주입(모델에 따라 필드명이 달라질 수 있어 보정)
+        if d.get("regulation") is None:
+            # 필요 시 개별 객체 조회 없이 문자열만 보정
+            pass
+        # CSV -> List[str]
+        csv_val = (d.pop("mapping_codes_csv", None) or "").strip()
+        codes = [c for c in (csv_val.split(";") if csv_val else []) if c]
+        d["mapping_codes"] = codes or None
+        models.append(RequirementRowOut.model_validate(d))
 
     if framework_code == "SAGE-Threat":
         enriched: List[RequirementRowOut] = []
@@ -144,9 +179,16 @@ def requirement_detail(db: Session, code: str, req_id: int) -> Optional[Requirem
         .all()
     )
 
-    # 🔽 여기 보강
     reg_text = _extract_regulation_text(req)
-    req_out = RequirementRowOut.model_validate(req).model_copy(update={"regulation": reg_text})
+    # ✅ 상세에도 mapping_codes를 일관되게 제공
+    mapping_codes = [m.code for m in maps]
+
+    req_out = RequirementRowOut.model_validate(req).model_copy(
+        update={
+            "regulation": reg_text,
+            "mapping_codes": mapping_codes or None,
+        }
+    )
 
     if code == "SAGE-Threat":
         hits = _build_applicable_hits(db, getattr(req, "applicable_compliance", None))
@@ -154,8 +196,8 @@ def requirement_detail(db: Session, code: str, req_id: int) -> Optional[Requirem
 
     return RequirementDetailOut(
         framework=req.framework_code,
-        regulation=reg_text,  # 상위 필드 유지
-        requirement=req_out,  # 내부에도 regulation 주입됨
+        regulation=reg_text,
+        requirement=req_out,
         mappings=[MappingOut.model_validate(m) for m in maps],
     )
 
