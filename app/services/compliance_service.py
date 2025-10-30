@@ -144,18 +144,20 @@ def requirement_detail(db: Session, code: str, req_id: int) -> Optional[Requirem
         .all()
     )
 
-    req_out = RequirementRowOut.model_validate(req)
+    # 🔽 여기 보강
+    reg_text = _extract_regulation_text(req)
+    req_out = RequirementRowOut.model_validate(req).model_copy(update={"regulation": reg_text})
+
     if code == "SAGE-Threat":
         hits = _build_applicable_hits(db, getattr(req, "applicable_compliance", None))
         req_out = req_out.model_copy(update={"applicable_hits": hits})
 
     return RequirementDetailOut(
         framework=req.framework_code,
-        regulation=_extract_regulation_text(req),
-        requirement=req_out,
+        regulation=reg_text,  # 상위 필드 유지
+        requirement=req_out,  # 내부에도 regulation 주입됨
         mappings=[MappingOut.model_validate(m) for m in maps],
     )
-
 # -----------------------------
 # ThreatGroup 매핑(그룹명 추가)
 # -----------------------------

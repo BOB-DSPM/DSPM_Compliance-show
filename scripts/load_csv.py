@@ -2,12 +2,13 @@
 # scripts/load_csv.py
 # - CSV/TSV 자동 구분, 인코딩 지정 가능
 # - 재실행 안전(Idempotent)
-# - 대용량 대응: 배치 커밋, bulk insert
+# - 대용량 대응: 배치 커밋(--commit-every)
 # - 유연한 헤더 매핑(한글/공백/대소문자 차이 흡수)
 # - 드라이런/부분 업데이트/요건-매핑 관계 중복 제거
 # - 요약 통계 출력
 # - ✅ requirements.recommended_fix / requirements.applicable_compliance 적재 지원
-# - ✅ NEW: ThreatGroup/Threat 테이블에 "위협 그룹, 위협" CSV 적재 지원
+# - ✅ ThreatGroup/Threat 테이블에 "위협 그룹, 위협" CSV 적재 지원
+# - ✅ NEW: Mapping에 "리소스(AWS 엔티티)" 컬럼 적재 지원(모델에 resource_entities 필드가 있을 경우만)
 
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ from sqlalchemy import select
 from app.core.db import engine, SessionLocal
 from app.models import (
     Framework, Requirement, Mapping, RequirementMapping,
-    ThreatGroup, Threat,  # ✅ 새 모델
+    ThreatGroup, Threat,
 )
 from app.core.db import Base
 
@@ -68,6 +69,11 @@ MAP_SPEC = HeaderSpec(
         "ID": ["ID", "id", "코드", "mapping_code"],
         "매핑번호": ["매핑번호", "카테고리", "category"],
         "서비스": ["서비스", "service"],
+        # ✅ NEW: 리소스(AWS 엔티티) 컬럼 인식
+        "리소스(AWS 엔티티)": [
+            "리소스(AWS 엔티티)", "리소스", "리소스엔티티", "resource", "resource_entities",
+            "Resource", "ResourceType", "Resources"
+        ],
         "콘솔 위치": ["콘솔 위치", "console_path", "console"],
         "점검/해결 방법": ["점검/해결 방법", "점검방법", "check_how", "howto"],
         "CLI 명령어": ["CLI 명령어", "cli", "cli_cmd"],
@@ -176,6 +182,10 @@ def upsert_mapping(db: Session, code: str, values: Dict[str, str], merge_mode: s
 
     assign("category", values.get("매핑번호", ""))
     assign("service", values.get("서비스", ""))
+    # ✅ NEW: 모델에 resource_entities 필드가 있을 때만 세팅
+    res_val = values.get("리소스(AWS 엔티티)", "")
+    if res_val and hasattr(m, "resource_entities"):
+        assign("resource_entities", res_val)
     assign("console_path", values.get("콘솔 위치", ""))
     assign("check_how", values.get("점검/해결 방법", ""))
     assign("cli_cmd", values.get("CLI 명령어", ""))
@@ -284,7 +294,7 @@ def attach_requirement_mappings(
     return len(news)
 
 # =========================
-# 업서트/로더 로직 (NEW: Threat)
+# 업서트/로더 로직 (Threat)
 # =========================
 
 def upsert_threat_group(db: Session, name: str) -> ThreatGroup:
@@ -311,12 +321,12 @@ def upsert_threat(db: Session, group_id: int, title: str) -> Threat:
 # CSV 로더
 # =========================
 
-def load_mappings(db: Session, mapping_csv: Path, dialect: Dict[str, Any], encoding: str, merge_mode: str):
+def load_mappings(db: Session, mapping_csv: Path, dialect: Dict[str, Any], encoding: str, merge_mode: str, commit_every: int):
     with mapping_csv.open("r", encoding=encoding, newline="") as f:
         reader = csv.DictReader(f, **dialect)
         hdrmap = normalize_header_map(reader.fieldnames or [], MAP_SPEC)
 
-        total, created = 0, 0
+        total, created, updated = 0, 0, 0
         for row in reader:
             total += 1
             code = getv(row, hdrmap, "ID")
@@ -325,17 +335,23 @@ def load_mappings(db: Session, mapping_csv: Path, dialect: Dict[str, Any], encod
             values = {k: getv(row, hdrmap, k) for k in MAP_SPEC.aliases.keys()}
             existed = bool(db.get(Mapping, code))
             upsert_mapping(db, code, values, merge_mode=merge_mode)
-            if not existed:
+            if existed:
+                updated += 1
+            else:
                 created += 1
 
-        log(f"Mappings: total={total}, created={created}, updated={total - created}")
+            if commit_every > 0 and total % commit_every == 0:
+                db.commit()
+                log(f"Mappings progress: {total} rows committed")
 
-def load_requirements(db: Session, req_csv: Path, dialect: Dict[str, Any], encoding: str, merge_mode: str):
+        log(f"Mappings: total={total}, created={created}, updated={updated}")
+
+def load_requirements(db: Session, req_csv: Path, dialect: Dict[str, Any], encoding: str, merge_mode: str, commit_every: int):
     with req_csv.open("r", encoding=encoding, newline="") as f:
         reader = csv.DictReader(f, **dialect)
         hdrmap = normalize_header_map(reader.fieldnames or [], REQ_SPEC)
 
-        total_req, created_req, linked_rel = 0, 0, 0
+        total_req, created_req, updated_req, linked_rel = 0, 0, 0, 0
 
         for row in reader:
             framework_code = getv(row, hdrmap, "컴플라이언스")
@@ -361,16 +377,22 @@ def load_requirements(db: Session, req_csv: Path, dialect: Dict[str, Any], encod
                 recommended_fix, applicable_compliance,
                 merge_mode=merge_mode
             )
-            if not existed:
+            if existed:
+                updated_req += 1
+            else:
                 created_req += 1
 
             mapping_ids = split_mapping_ids(getv(row, hdrmap, "매핑ID"))
             if mapping_ids:
                 linked_rel += attach_requirement_mappings(db, r.id, mapping_ids, relation_type="direct")
 
-        log(f"Requirements: total={total_req}, created={created_req}, updated={total_req - created_req}, links_added={linked_rel}")
+            if commit_every > 0 and total_req % commit_every == 0:
+                db.commit()
+                log(f"Requirements progress: {total_req} rows committed")
 
-def load_threats(db: Session, threat_csv: Path, dialect: Dict[str, Any], encoding: str):
+        log(f"Requirements: total={total_req}, created={created_req}, updated={updated_req}, links_added={linked_rel}")
+
+def load_threats(db: Session, threat_csv: Path, dialect: Dict[str, Any], encoding: str, commit_every: int):
     """
     입력 예시:
     위협 그룹,위협
@@ -405,6 +427,10 @@ def load_threats(db: Session, threat_csv: Path, dialect: Dict[str, Any], encodin
                 if not existed_threat:
                     created_threats += 1
 
+            if commit_every > 0 and total_rows % commit_every == 0:
+                db.commit()
+                log(f"Threats progress: {total_rows} rows committed")
+
         log(f"Threats CSV: rows={total_rows}, groups_created={created_groups}, threats_created={created_threats}")
 
 # =========================
@@ -438,7 +464,7 @@ def main():
     log(f"mappings:     {args.mappings} ({args.encoding}, {map_dialect})")
     if args.threats:
         log(f"threats:      {args.threats} ({args.encoding}, {thr_dialect})")
-    log(f"merge_mode={args.merge_mode}, dry_run={args.dry_run}")
+    log(f"merge_mode={args.merge_mode}, dry_run={args.dry_run}, commit_every={args.commit_every}")
 
     if args.dry_run:
         with args.mappings.open("r", encoding=args.encoding, newline="") as f:
@@ -455,17 +481,17 @@ def main():
         return
 
     with SessionLocal() as db:
-        # 1) 매핑 선적재
-        load_mappings(db, args.mappings, map_dialect, args.encoding, merge_mode=args.merge_mode)
+        # 1) 매핑 선적재 (+리소스 엔티티)
+        load_mappings(db, args.mappings, map_dialect, args.encoding, merge_mode=args.merge_mode, commit_every=args.commit_every)
         db.commit()
 
         # 2) 요건+관계 (+권장해결/해당컴플)
-        load_requirements(db, args.requirements, req_dialect, args.encoding, merge_mode=args.merge_mode)
+        load_requirements(db, args.requirements, req_dialect, args.encoding, merge_mode=args.merge_mode, commit_every=args.commit_every)
         db.commit()
 
         # 3) (옵션) 위협 그룹/위협 적재
         if args.threats:
-            load_threats(db, args.threats, thr_dialect, args.encoding)
+            load_threats(db, args.threats, thr_dialect, args.encoding, commit_every=args.commit_every)
             db.commit()
 
     log("✅ CSV 적재 완료")
