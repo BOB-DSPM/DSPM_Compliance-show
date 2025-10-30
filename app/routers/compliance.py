@@ -24,7 +24,7 @@ from ..schemas import (
 from ..utils.etag import etag_response
 
 ensure_tables(engine)
-router = APIRouter(prefix="/compliance", tags=["compliance"])
+router = APIRouter(tags=["compliance"])
 
 @router.get("/stats", response_model=List[FrameworkCountOut])
 def get_counts(request: Request, response: Response, db: Session = Depends(get_db)):
