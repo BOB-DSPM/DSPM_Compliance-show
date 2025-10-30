@@ -63,3 +63,11 @@ class RequirementDetailOut(BaseModel):
     regulation: Optional[str] = None
     mappings: List[MappingOut]
     model_config = FROM_ATTRS
+    threat_groups: list[ThreatGroupOut] | None = None
+    class Config: orm_mode = True
+
+
+class ThreatGroupOut(BaseModel):
+    id: int
+    name: str
+    class Config: orm_mode = True

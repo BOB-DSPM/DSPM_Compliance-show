@@ -7,7 +7,7 @@
 # - 드라이런/부분 업데이트/요건-매핑 관계 중복 제거
 # - 요약 통계 출력
 # - ✅ requirements.recommended_fix / requirements.applicable_compliance 적재 지원
-# - ✅ threat_groups.csv("위협 그룹","위협") 적재 지원 → SAGE-Threat 요건과 그룹 매핑
+# - ✅ threat_groups.csv("위협 그룹","위협") 적재 지원 → SAGE-Threat 요건과 그룹 매핑(위협 다중값 ;/ , 분리)
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Iterable, List, Dict, Tuple, Optional, Any, Set
 
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from app.core.db import engine, SessionLocal
 from app.models import (
     Framework, Requirement, Mapping, RequirementMapping,
@@ -144,6 +144,26 @@ def split_mapping_ids(val: str) -> List[str]:
     # "1.0-01; 1.0-02 ;" -> ["1.0-01","1.0-02"]
     parts = [p.strip() for p in val.replace(",", ";").split(";")]
     return [p for p in parts if p]
+
+def split_multi(val: str) -> List[str]:
+    """
+    "a;b;c" 또는 "a, b, c" 형태의 다중 값을 ; / , 모두 구분자로 분리.
+    공백/중복 제거 및 입력 순서 유지.
+    """
+    if not val:
+        return []
+    parts = []
+    for seg in val.replace("\n", " ").split(";"):
+        for seg2 in seg.split(","):
+            s = seg2.strip()
+            if s:
+                parts.append(s)
+    seen, out = set(), []
+    for p in parts:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
 
 # =========================
 # 업서트/로더 로직
@@ -383,50 +403,57 @@ def load_threat_groups(db: Session, threat_csv: Path, dialect: Dict[str, Any], e
     """
     threat_groups.csv 예시:
         위협 그룹,위협
-        권한/계정 관리 문제,내부자 과도한 권한 및 오남용
-        ...
-    '위협' 컬럼 값은 SAGE-Threat Requirement.title 과 매칭(정확 일치 기준).
+        권한/계정 관리 문제,"내부자 과도한 권한 및 오남용;권한 없는 사용자 개인정보 열람;..."
+    '위협' 컬럼 값은 SAGE-Threat Requirement.title 또는 item_code 와 정확 일치 기준.
+    한 셀에 다중 위협이 ';' 또는 ',' 로 구분되어 있을 수 있음.
     """
     with threat_csv.open("r", encoding=encoding, newline="") as f:
         reader = csv.DictReader(f, **dialect)
         hdrmap = normalize_header_map(reader.fieldnames or [], THREAT_SPEC)
 
-        total, linked, missing_req = 0, 0, 0
+        total_rows, linked_pairs, missing_req = 0, 0, 0
         for row in reader:
-            total += 1
+            total_rows += 1
             grp = getv(row, hdrmap, "위협 그룹")
-            th_title = getv(row, hdrmap, "위협")
-            if not grp or not th_title:
+            th_raw = getv(row, hdrmap, "위협")
+            if not grp or not th_raw:
                 continue
 
-            # SAGE-Threat 요건 찾기: title 정확 일치 우선
-            req = (
-                db.execute(
-                    select(Requirement).where(
-                        Requirement.framework_code == "SAGE-Threat",
-                        Requirement.title == th_title
-                    )
-                ).scalars().first()
-            )
-            if not req:
-                # 타이틀이 item_code 로 오거나 공백 차이를 대비한 느슨 매칭(선택)
+            for th_title in split_multi(th_raw):
+                # SAGE-Threat 요건 찾기: title 혹은 item_code 일치
                 req = (
                     db.execute(
                         select(Requirement).where(
                             Requirement.framework_code == "SAGE-Threat",
-                            Requirement.title.ilike(th_title.strip())
+                            or_(
+                                Requirement.title == th_title,
+                                Requirement.item_code == th_title
+                            )
                         )
                     ).scalars().first()
                 )
-            if not req:
-                missing_req += 1
-                continue
+                if not req:
+                    # 공백/대소문자 차이 완화
+                    req = (
+                        db.execute(
+                            select(Requirement).where(
+                                Requirement.framework_code == "SAGE-Threat",
+                                or_(
+                                    Requirement.title.ilike(th_title.strip()),
+                                    Requirement.item_code.ilike(th_title.strip())
+                                )
+                            )
+                        ).scalars().first()
+                    )
+                if not req:
+                    missing_req += 1
+                    continue
 
-            tg = upsert_threat_group(db, grp)
-            if attach_threat_group_map(db, tg.id, req.id):
-                linked += 1
+                tg = upsert_threat_group(db, grp)
+                if attach_threat_group_map(db, tg.id, req.id):
+                    linked_pairs += 1
 
-        log(f"ThreatGroups: rows={total}, links_added={linked}, missing_requirements={missing_req}")
+        log(f"ThreatGroups: rows={total_rows}, links_added={linked_pairs}, missing_requirements={missing_req}")
 
 # =========================
 # 메인

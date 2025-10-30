@@ -1,8 +1,9 @@
 # app/models.py
 from __future__ import annotations
 from typing import List
-from sqlalchemy import String, Text, ForeignKey, UniqueConstraint 
+from sqlalchemy import String, Integer, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from .core.db import Base
 
 class Framework(Base):
@@ -62,20 +63,22 @@ class RequirementMapping(Base):
 class ThreatGroup(Base):
     __tablename__ = "threat_groups"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    # 역참조
+    maps: Mapped[list["ThreatGroupMap"]] = relationship(back_populates="group", cascade="all,delete-orphan")
 
-    # 역방향: 이 그룹에 속한 SAGE-Threat requirements
-    requirements: Mapped[list["Requirement"]] = relationship(
-        secondary="threat_group_map",
-        back_populates="threat_groups",
-    )
 
 
 class ThreatGroupMap(Base):
-    __tablename__ = "threat_group_map"
-    group_id: Mapped[int] = mapped_column(ForeignKey("threat_groups.id", ondelete="CASCADE"), primary_key=True)
-    requirement_id: Mapped[int] = mapped_column(ForeignKey("requirements.id", ondelete="CASCADE"), primary_key=True)
+    __tablename__ = "threat_group_maps"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("threat_groups.id", ondelete="CASCADE"), index=True)
+    requirement_id: Mapped[int] = mapped_column(ForeignKey("requirements.id", ondelete="CASCADE"), index=True)
+
+    group: Mapped["ThreatGroup"] = relationship(back_populates="maps")
+    requirement: Mapped["Requirement"] = relationship(viewonly=True)
 
     __table_args__ = (
-        UniqueConstraint("group_id", "requirement_id", name="uq_group_req"),
+        UniqueConstraint("group_id", "requirement_id", name="uq_threat_group_requirement"),
+        Index("ix_tgm_group_req", "group_id", "requirement_id"),
     )
