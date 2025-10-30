@@ -1,7 +1,13 @@
-# app/models.py
 from __future__ import annotations
-from typing import List
-from sqlalchemy import String, Integer, ForeignKey, UniqueConstraint, Index
+from typing import List, Optional
+
+from sqlalchemy import (
+    String,
+    Text,
+    ForeignKey,
+    Integer,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .core.db import Base
