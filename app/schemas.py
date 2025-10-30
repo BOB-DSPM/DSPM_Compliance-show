@@ -38,6 +38,7 @@ class RequirementRowOut(BaseModel):
     recommended_fix: Optional[str] = None
     applicable_compliance: Optional[str] = None
     mapping_codes: Optional[List[str]] = None
+    mapping_services: Optional[List[str]] = None
     # SAGE-Threat 전용(서비스에서 주입)
     applicable_hits: Optional[List[ApplicableComplianceHitOut]] = None
 

@@ -103,11 +103,11 @@ def _build_applicable_hits(db: Session, applicable_compliance: Optional[str]) ->
 # -----------------------------
 def list_requirements(db: Session, framework_code: str) -> List[RequirementRowOut]:
     """
-    목록 API에서 각 항목별 매핑 코드들을 함께 반환한다.
-    - SQLite: group_concat 사용
-    - 다른 DB 사용 시 string_agg로 교체 필요
+    목록 API에서 각 항목별 매핑 코드들과 매핑 서비스들을 함께 반환한다.
+    - SQLite: group_concat 사용(중복은 파이썬에서 제거)
     """
     mapping_codes_csv = func.group_concat(RequirementMapping.mapping_code, ";")
+    mapping_services_csv = func.group_concat(Mapping.service, ";")
 
     rows = (
         db.query(
@@ -121,11 +121,10 @@ def list_requirements(db: Session, framework_code: str) -> List[RequirementRowOu
             Requirement.recommended_fix.label("recommended_fix"),
             Requirement.applicable_compliance.label("applicable_compliance"),
             mapping_codes_csv.label("mapping_codes_csv"),
+            mapping_services_csv.label("mapping_services_csv"),
         )
-        .outerjoin(
-            RequirementMapping,
-            RequirementMapping.requirement_id == Requirement.id,
-        )
+        .outerjoin(RequirementMapping, RequirementMapping.requirement_id == Requirement.id)
+        .outerjoin(Mapping, Mapping.code == RequirementMapping.mapping_code)
         .filter(Requirement.framework_code == framework_code)
         .group_by(
             Requirement.id,
@@ -142,17 +141,25 @@ def list_requirements(db: Session, framework_code: str) -> List[RequirementRowOu
         .all()
     )
 
+    def _split_csv(val: str | None) -> List[str]:
+        if not val:
+            return []
+        parts = [p.strip() for p in val.split(";") if p.strip()]
+        # 중복 제거(순서 보존)
+        seen, uniq = set(), []
+        for x in parts:
+            if x not in seen:
+                seen.add(x)
+                uniq.append(x)
+        return uniq
+
     models: List[RequirementRowOut] = []
     for r in rows:
         d = dict(r._mapping)
-        # 정규화된 regulation 주입(모델에 따라 필드명이 달라질 수 있어 보정)
-        if d.get("regulation") is None:
-            # 필요 시 개별 객체 조회 없이 문자열만 보정
-            pass
-        # CSV -> List[str]
-        csv_val = (d.pop("mapping_codes_csv", None) or "").strip()
-        codes = [c for c in (csv_val.split(";") if csv_val else []) if c]
+        codes = _split_csv(d.pop("mapping_codes_csv", None))
+        services = _split_csv(d.pop("mapping_services_csv", None))
         d["mapping_codes"] = codes or None
+        d["mapping_services"] = services or None
         models.append(RequirementRowOut.model_validate(d))
 
     if framework_code == "SAGE-Threat":
@@ -180,13 +187,21 @@ def requirement_detail(db: Session, code: str, req_id: int) -> Optional[Requirem
     )
 
     reg_text = _extract_regulation_text(req)
-    # ✅ 상세에도 mapping_codes를 일관되게 제공
-    mapping_codes = [m.code for m in maps]
+    mapping_codes = [m.code for m in maps if getattr(m, "code", None)]
+    # ✅ 상세에도 매핑 서비스 리스트 제공
+    mapping_services = []
+    seen = set()
+    for m in maps:
+        s = (m.service or "").strip()
+        if s and s not in seen:
+            seen.add(s)
+            mapping_services.append(s)
 
     req_out = RequirementRowOut.model_validate(req).model_copy(
         update={
             "regulation": reg_text,
             "mapping_codes": mapping_codes or None,
+            "mapping_services": mapping_services or None,
         }
     )
 
