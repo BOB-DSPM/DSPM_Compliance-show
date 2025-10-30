@@ -1,10 +1,20 @@
 # app/services/compliance_service.py
 from __future__ import annotations
-from typing import List, Optional
+
 import re
+from typing import List, Optional
+
 from sqlalchemy import select, func, or_
 from sqlalchemy.orm import Session
-from ..models import Framework, Requirement, Mapping, RequirementMapping
+
+from ..models import (
+    Framework,
+    Requirement,
+    Mapping,
+    RequirementMapping,
+    ThreatGroup,
+    Threat,
+)
 from ..schemas import (
     FrameworkCountOut,
     RequirementRowOut,
@@ -12,19 +22,13 @@ from ..schemas import (
     RequirementDetailOut,
     RequirementMiniOut,
     ApplicableComplianceHitOut,
+    RequirementRowWithGroupsOut,
+    RequirementDetailWithGroupsOut,
 )
 
 def ensure_tables(engine) -> None:
     from ..core.db import Base
     Base.metadata.create_all(bind=engine)
-
-def framework_counts(db: Session) -> List[FrameworkCountOut]:
-    rows = db.execute(
-        select(Requirement.framework_code, func.count(Requirement.id))
-        .group_by(Requirement.framework_code)
-        .order_by(Requirement.framework_code)
-    ).all()
-    return [FrameworkCountOut(framework=f, count=c) for (f, c) in rows]
 
 def _extract_regulation_text(req: Requirement) -> Optional[str]:
     for field in ("regulation", "reg_text", "description", "content", "detail", "body"):
@@ -34,7 +38,20 @@ def _extract_regulation_text(req: Requirement) -> Optional[str]:
                 return str(val)
     return None
 
-# --- SAGE-Threat 전용: applicable_compliance 파싱 & 재조회 ---
+def framework_counts(db: Session) -> List[FrameworkCountOut]:
+    rows = (
+        db.execute(
+            select(Requirement.framework_code, func.count(Requirement.id))
+            .group_by(Requirement.framework_code)
+            .order_by(Requirement.framework_code)
+        )
+        .all()
+    )
+    return [FrameworkCountOut(framework=f, count=c) for (f, c) in rows]
+
+# -----------------------------
+# applicable_compliance 파싱/재조회
+# -----------------------------
 _CODE_TITLE_RE = re.compile(r"^\s*([0-9][\d\.]*)\s*(.*)$")
 
 def _split_tokens(s: Optional[str]) -> List[str]:
@@ -56,12 +73,9 @@ def _query_matches_for_token(db: Session, code: Optional[str], title: Optional[s
     if code:
         conds.append(Requirement.item_code == code)
     if title:
-        # 느슨한 제목 매칭(부분 일치). 필요 시 정규화/키워드 매핑 테이블로 고도화 가능
         conds.append(Requirement.title.ilike(f"%{title}%"))
-
     if not conds:
         return []
-
     rows = q.filter(or_(*conds)).order_by(Requirement.framework_code, Requirement.id).all()
     out: List[RequirementMiniOut] = []
     for r in rows:
@@ -84,6 +98,9 @@ def _build_applicable_hits(db: Session, applicable_compliance: Optional[str]) ->
         hits.append(ApplicableComplianceHitOut(raw=token, code=code, title=title, matches=matches))
     return hits
 
+# -----------------------------
+# 기본 목록/상세 (원형 유지)
+# -----------------------------
 def list_requirements(db: Session, framework_code: str) -> List[RequirementRowOut]:
     rows = (
         db.query(
@@ -103,7 +120,6 @@ def list_requirements(db: Session, framework_code: str) -> List[RequirementRowOu
     )
     models = [RequirementRowOut.model_validate(dict(r._mapping)) for r in rows]
 
-    # ✅ SAGE-Threat면 applicable_compliance 토큰별로 같은 DB에서 재조회
     if framework_code == "SAGE-Threat":
         enriched: List[RequirementRowOut] = []
         for m in models:
@@ -138,4 +154,92 @@ def requirement_detail(db: Session, code: str, req_id: int) -> Optional[Requirem
         regulation=_extract_regulation_text(req),
         requirement=req_out,
         mappings=[MappingOut.model_validate(m) for m in maps],
+    )
+
+# -----------------------------
+# ThreatGroup 매핑(그룹명 추가)
+# -----------------------------
+def _norm_text(s: Optional[str]) -> str:
+    return (s or "").strip().lower()
+
+def _candidate_groups(db: Session, title: Optional[str]) -> List[str]:
+    """
+    title로 ThreatGroup 후보 전부 수집(정확→부분). 중복 제거, 원문 표기 유지.
+    """
+    t = _norm_text(title)
+    if not t:
+        return []
+    names: List[str] = []
+
+    exact = (
+        db.query(ThreatGroup.name)
+        .join(Threat, Threat.group_id == ThreatGroup.id)
+        .filter(func.lower(Threat.title) == t)
+        .distinct()
+        .all()
+    )
+    names.extend([n for (n,) in exact])
+    if names:
+        return sorted(set(names))  # 정확 일치 우선
+
+    like_hits = (
+        db.query(ThreatGroup.name)
+        .join(Threat, Threat.group_id == ThreatGroup.id)
+        .filter(Threat.title.ilike(f"%{title}%"))
+        .distinct()
+        .all()
+    )
+    names.extend([n for (n,) in like_hits])
+    return sorted(set(names))
+
+def _pick_primary_group(candidates: List[str]) -> Optional[str]:
+    return candidates[0] if candidates else None
+
+def list_requirements_with_groups(db: Session, framework_code: str) -> List[RequirementRowWithGroupsOut]:
+    """
+    기존 list_requirements 결과에 threat_group(단수) + threat_groups(복수) 주입.
+    SAGE-Threat가 아니면 둘 다 None.
+    """
+    base_rows = list_requirements(db, framework_code)
+    out: List[RequirementRowWithGroupsOut] = []
+    is_threat = (framework_code == "SAGE-Threat")
+
+    for m in base_rows:
+        if is_threat:
+            candidates = _candidate_groups(db, m.title)
+            primary = _pick_primary_group(candidates)
+            out.append(
+                RequirementRowWithGroupsOut.model_validate(
+                    m.model_dump() | {"threat_group": primary, "threat_groups": candidates or None}
+                )
+            )
+        else:
+            out.append(
+                RequirementRowWithGroupsOut.model_validate(
+                    m.model_dump() | {"threat_group": None, "threat_groups": None}
+                )
+            )
+    return out
+
+def requirement_detail_with_groups(db: Session, code: str, req_id: int) -> Optional[RequirementDetailWithGroupsOut]:
+    base = requirement_detail(db, code, req_id)
+    if not base:
+        return None
+
+    if code == "SAGE-Threat":
+        candidates = _candidate_groups(db, base.requirement.title)
+        primary = _pick_primary_group(candidates)
+        req_with_groups = RequirementRowWithGroupsOut.model_validate(
+            base.requirement.model_dump() | {"threat_group": primary, "threat_groups": candidates or None}
+        )
+    else:
+        req_with_groups = RequirementRowWithGroupsOut.model_validate(
+            base.requirement.model_dump() | {"threat_group": None, "threat_groups": None}
+        )
+
+    return RequirementDetailWithGroupsOut(
+        framework=base.framework,
+        regulation=base.regulation,
+        requirement=req_with_groups,
+        mappings=base.mappings,
     )

@@ -1,14 +1,11 @@
 # app/schemas.py
 from __future__ import annotations
-from typing import Optional, List
-from pydantic import BaseModel, ConfigDict
-
-FROM_ATTRS = ConfigDict(from_attributes=True)
+from typing import List, Optional
+from pydantic import BaseModel
 
 class FrameworkCountOut(BaseModel):
     framework: str
     count: int
-    model_config = FROM_ATTRS
 
 class RequirementMiniOut(BaseModel):
     id: int
@@ -16,45 +13,58 @@ class RequirementMiniOut(BaseModel):
     item_code: Optional[str] = None
     title: str
     regulation: Optional[str] = None
-    model_config = FROM_ATTRS
 
 class ApplicableComplianceHitOut(BaseModel):
-    raw: str                          # 원본 토큰 (“7.4.3 Accuracy and quality”)
-    code: Optional[str] = None        # 파싱된 코드 (“7.4.3”)
-    title: Optional[str] = None       # 파싱된 제목 (“Accuracy and quality”)
-    matches: List[RequirementMiniOut] = []   # 같은 DB에서 재조회된 매칭 결과(0..N)
+    raw: str
+    code: Optional[str] = None
+    title: Optional[str] = None
+    matches: List[RequirementMiniOut] = []
 
 class RequirementRowOut(BaseModel):
     id: int
-    item_code: Optional[str] = None
+    item_code: Optional[str]
     title: str
-    mapping_status: Optional[str] = None
-    regulation: Optional[str] = None
-    auditable: Optional[str] = None
-    audit_method: Optional[str] = None
-    recommended_fix: Optional[str] = None
-    applicable_compliance: Optional[str] = None
-    # ✅ SAGE-Threat 전용 확장 필드
+    mapping_status: Optional[str]
+    regulation: Optional[str]
+    auditable: Optional[str]
+    audit_method: Optional[str]
+    recommended_fix: Optional[str]
+    applicable_compliance: Optional[str]
+    # SAGE-Threat 전용(서비스에서 주입)
     applicable_hits: Optional[List[ApplicableComplianceHitOut]] = None
-    model_config = FROM_ATTRS
+
+    class Config:
+        from_attributes = True  # ✅ Pydantic v2
+
+class RequirementRowWithGroupsOut(RequirementRowOut):
+    # 대표 그룹(단수) + 후보(복수)
+    threat_group: Optional[str] = None
+    threat_groups: Optional[List[str]] = None
 
 class MappingOut(BaseModel):
     code: str
-    category: Optional[str] = None
-    service: Optional[str] = None
-    console_path: Optional[str] = None
-    check_how: Optional[str] = None
-    cli_cmd: Optional[str] = None
-    return_field: Optional[str] = None
-    compliant_value: Optional[str] = None
-    non_compliant_value: Optional[str] = None
-    console_fix: Optional[str] = None
-    cli_fix_cmd: Optional[str] = None
-    model_config = FROM_ATTRS
+    category: Optional[str]
+    service: Optional[str]
+    console_path: Optional[str]
+    check_how: Optional[str]
+    cli_cmd: Optional[str]
+    return_field: Optional[str]
+    compliant_value: Optional[str]
+    non_compliant_value: Optional[str]
+    console_fix: Optional[str]
+    cli_fix_cmd: Optional[str]
+
+    class Config:
+        from_attributes = True
 
 class RequirementDetailOut(BaseModel):
     framework: str
+    regulation: Optional[str]
     requirement: RequirementRowOut
-    regulation: Optional[str] = None
     mappings: List[MappingOut]
-    model_config = FROM_ATTRS
+
+class RequirementDetailWithGroupsOut(BaseModel):
+    framework: str
+    regulation: Optional[str]
+    requirement: RequirementRowWithGroupsOut
+    mappings: List[MappingOut]
