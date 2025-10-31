@@ -45,7 +45,8 @@ class RequirementRowOut(BaseModel):
     class Config:
         from_attributes = True  # Pydantic v2
 
-# 위협 그룹명 주입 버전(목록/상세 공용)
+# ---------- 위협 그룹명 주입 버전(목록/상세 공용) ----------
+
 class RequirementRowWithGroupsOut(RequirementRowOut):
     # 대표 그룹(단수) + 후보(복수)
     threat_group: Optional[str] = None
@@ -84,3 +85,30 @@ class RequirementDetailWithGroupsOut(BaseModel):
     regulation: Optional[str] = None
     requirement: RequirementRowWithGroupsOut
     mappings: List[MappingOut]
+
+# ---------- (신규) 위협 제안/고정 매핑 ----------
+
+class ThreatMiniOut(BaseModel):
+    id: int
+    title: str
+    group_name: Optional[str] = None
+    score: Optional[float] = None
+    reasons: Optional[List[str]] = None
+
+    class Config:
+        from_attributes = True  # Pydantic v2
+
+class RequirementRowWithThreatsOut(RequirementRowOut):
+    # 고정 매핑(있다면)과 자동 제안(있다면)을 모두 담을 수 있게 필드 분리
+    threats: Optional[List[ThreatMiniOut]] = None             # 통합(고정 + 제안 dedup)
+    fixed_threats: Optional[List[ThreatMiniOut]] = None       # 수동/고정 매핑만
+    suggested_threats: Optional[List[ThreatMiniOut]] = None   # 자동 제안만
+
+class RequirementDetailWithThreatsOut(BaseModel):
+    framework: str
+    regulation: Optional[str] = None
+    requirement: RequirementRowWithThreatsOut
+    mappings: List[MappingOut]
+
+    class Config:
+        from_attributes = True
