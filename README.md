@@ -11,8 +11,8 @@ pip install -r requirements.txt
 
 # 2. CSV 데이터 로드
 python -m scripts.load_csv \
-  --requirements ./data/compliance-gorn.csv \
-  --mappings ./data/mapping-standard.csv
+  --requirements ./compliance-gorn.csv \
+  --mappings ./mapping-standard.csv
 
 # 3. API 서버 실행
 python -m app.main
@@ -154,6 +154,8 @@ app.add_middleware(
 ```
 
 ## .gitignore
+
+프로젝트 루트에 `.gitignore` 파일을 생성하고 아래 내용을 추가하세요:
 ```
 # Python
 __pycache__/
