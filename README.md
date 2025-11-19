@@ -232,3 +232,39 @@ python -m app.main
 APP_PORT=8004 python -m app.main
 ```
 또는 `app/main.py`에서 `uvicorn.run()` 포트 수정
+
+## Docker 이미지 빌드 & 실행 (AWS Marketplace 대비)
+
+프로젝트 루트에 있는 `Dockerfile`은 `python:3.12-slim` 기반이며, 비루트 사용자(`appuser`)로 FastAPI 앱을 실행하도록 구성되어 있습니다. `_entry.py`는 컨테이너 기동 시 SQLite DB(기본 `/app/app.db`)를 자동 시드합니다.
+
+```bash
+# 기본 빌드/실행
+docker build -t compliance-api .
+docker run --rm -p 8003:8003 compliance-api
+
+# CSV를 다시 적재하려면 FORCE_SEED=1 지정
+docker run --rm -e FORCE_SEED=1 -p 8003:8003 compliance-api
+
+# AWS Marketplace 업로드 대비 멀티아키텍처 빌드 (ECR 예시)
+aws ecr get-login-password --region <region> | \
+  docker login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com
+
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t <account>.dkr.ecr.<region>.amazonaws.com/compliance-api:latest \
+  --push .
+```
+
+컨테이너는 `/health` 엔드포인트로 헬스체크를 제공하며, 외부 의존성은 포함하지 않습니다. 사용 설명서에는 노출 포트(기본 `8003`), 요구 CPU/메모리, 필요한 환경 변수(`PORT`, `APP_HOST`, `REQUIREMENTS_CSV`, `MAPPINGS_CSV`, `FORCE_SEED`) 등을 명확하게 기재하세요.
+
+## AWS Marketplace 컨테이너 가이드
+
+AWS Marketplace에 제출할 때 확인해야 하는 핵심 요구 사항과 이 프로젝트의 대응 방향입니다.
+
+- **보안 정책**: 루트가 아닌 사용자로 실행, 불필요한 패키지 제거, 이미지에 비밀번호·AWS 자격 증명·라이선스 키를 포함하지 않습니다. 빌드 파이프라인에 `trivy`나 `grype`로 취약성 스캔을 추가하세요.
+- **고객 정보 요구 사항**: 앱은 입력 CSV/SQLite 외 고객 데이터를 외부로 전송하지 않습니다. BYOL 등 고객 데이터 수집이 필요한 경우 사용자 동의/자동화 절차를 문서화해야 합니다.
+- **제품 사용 요구 사항**: README/Marketplace 가이드에 컨테이너 배포 단계(ECR 업로드 → EKS/ECS/Fargate 실행), 필요 IAM 권한, 외부 의존성(없음), 상태 점검 방법(`/health`)을 포함합니다.
+- **아키텍처 요구 사항**: 컨테이너 이미지는 AWS가 제공하는 ECR 리포지터리에 푸시하고, Linux 기반이며 Amazon ECS/EKS/Fargate 배포 매니페스트를 제공해야 합니다. Helm 차트를 사용할 경우 이미지 참조는 `values.yaml` 변수로만 정의합니다.
+- **Helm/추가 기능**: Amazon EKS Add-on으로 게시하려면 amd64/arm64 지원, `aws_mp_configuration_schema.json`·`aws_mp_addon_parameters.json` 구성, IRSA/Pod Identity 권한 정의, Helm Lint/Template 통과, CRD 처리 전략 등을 갖추세요.
+- **외부 종속성/라이선스**: 배포 시 추가 결제 수단이 없어야 하며, 지속적 외부 서비스 호출이 필요하면 사용説明과 SLA를 명시합니다. PAYG/계약 모델을 선택한다면 AWS Marketplace Metering 또는 License Manager 통합이 필요합니다.
+
+요구 사항은 정기적으로 업데이트되므로 제출 전 [AWS Marketplace Seller Guide](https://docs.aws.amazon.com/marketplace/latest/seller-guide/what-is-aws-marketplace.html)의 컨테이너 섹션을 다시 확인하고 체크리스트를 갱신하세요.
